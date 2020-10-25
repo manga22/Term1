@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-import numpy
+import numpy as np
 import skimage
-import time
 
-from matplotlib import pyplot
+from manogna_sreenivas.helper import otsu_min_wclass_var, otsu_max_bclass_var, get_padded_image, \
+    get_connected_components
 
 
 def compute_hist(image_path: Path, num_bins: int) -> list:
@@ -16,262 +16,171 @@ def compute_hist(image_path: Path, num_bins: int) -> list:
     image = image.flatten()
 
     # custom function
-    bins = numpy.linspace(numpy.amin(image), numpy.amax(image), num_bins + 1)
-    freq_vec = numpy.zeros(num_bins)
+    bins = np.linspace(np.amin(image), np.amax(image), num_bins + 1)
+    freq_vec = np.zeros(num_bins)
     for k in range(num_bins):
-        freq_vec[k] = numpy.sum(numpy.bitwise_and(numpy.greater_equal(image, bins[k]), numpy.less(image, bins[k + 1])))
-    freq_vec[num_bins - 1] += numpy.sum(numpy.equal(image, bins[num_bins]))
+        freq_vec[k] = np.sum(np.bitwise_and(np.greater_equal(image, bins[k]), np.less(image, bins[k + 1])))
+    freq_vec[num_bins - 1] += np.sum(np.equal(image, bins[num_bins]))
 
     # using library function
-    freq_vec_lib, bin_edges_lib = numpy.histogram(image, bins=num_bins)
+    freq_vec_lib, bin_edges_lib = np.histogram(image, bins=num_bins)
 
     # get bin centres from bin edges
     bins_vec = (bins[:num_bins] + bins[1:]) / 2
     bins_vec_lib = (bin_edges_lib[:num_bins] + bin_edges_lib[1:]) / 2
 
-    # print(bins, bins_vec, freq_vec)
     return [bins_vec, freq_vec, bins_vec_lib, freq_vec_lib]
 
 
-def otsu_hist(image: numpy.ndarray) -> list:
-    image = image.flatten()
-
-    # custom function to get histogramG
-    bins_vec = numpy.arange(numpy.amin(image), numpy.amax(image) + 1)
-    freq_vec = numpy.zeros(bins_vec.shape)
-    num_bins = bins_vec.shape[0]
-    for k in range(num_bins):
-        freq_vec[k] = numpy.sum(numpy.equal(image, bins_vec[k]))
-    prob_vec = freq_vec / (image.shape[0])
-    return [bins_vec, freq_vec, prob_vec]
-
-
 def otsu_threshold(gray_image_path: Path) -> list:
-    thr_w = thr_b = time_w = time_b = 0
-
     gray_image = skimage.io.imread(gray_image_path)
-    bins_vec, freq_vec, prob_vec = otsu_hist(gray_image)
-    # Compute class probabilities at each threshold
-    class0_prob_t = numpy.cumsum(prob_vec)
-    class1_prob_t = 1 - class0_prob_t
-
-    # Compute class means at each threshold
-    kpk = bins_vec * prob_vec
-    cum_kpk_0t = numpy.cumsum(kpk)
-    cum_kpk_1t = cum_kpk_0t[-1] - cum_kpk_0t
-    class0_mean_t = cum_kpk_0t / (class0_prob_t + 10 ** (-20))
-    class1_mean_t = cum_kpk_1t / (class1_prob_t + 10 ** (-20))
-
     # Minimizing within class variance
-
-    # Compute Class variance at each threshold
-    start_time = time.time()
-    class0_var_t = numpy.zeros(bins_vec.shape, dtype=float)
-    class1_var_t = numpy.zeros(bins_vec.shape, dtype=float)
-    num_bins = bins_vec.shape[0]
-    for t in range(num_bins):
-        class0_var_t[t] = numpy.sum(numpy.square(bins_vec[:t + 1] - class0_mean_t[t]) * prob_vec[:t + 1]) / \
-                          (class0_prob_t[t] + 10 ** (-20))
-        # print(bins_vec, class0_prob_t[t], class1_prob_t[t])
-        class1_var_t[t] = numpy.sum((numpy.square(bins_vec[t + 1:] - class1_mean_t[t]) * prob_vec[t + 1:])) / \
-                          (class1_prob_t[t] + 10 ** (-20))
-    within_class_var = class0_prob_t * class0_var_t + class1_prob_t * class1_var_t  # within class variance at each threshold
-    thr_w = bins_vec[numpy.argmin(within_class_var)]
-    end_time = time.time()
-    time_w = end_time - start_time
-
+    thr_w, time_w = otsu_min_wclass_var(gray_image)
     # Maximizing between class variance
-    start_time = time.time()
-    total_mean_ref = numpy.sum(bins_vec * prob_vec)
-    between_class_var = class0_prob_t * numpy.square(class0_mean_t - total_mean_ref) + class1_prob_t * numpy.square(
-        class1_mean_t - total_mean_ref)
-    thr_b = bins_vec[numpy.argmax(between_class_var)]
-    end_time = time.time()
-    time_b = end_time - start_time
-
-    # Verify mean, variance computation
-    total_mean = class0_mean_t * class0_prob_t + class1_mean_t * class1_prob_t
-    total_mean_ref = numpy.sum(bins_vec * prob_vec)
-    total_var = within_class_var + between_class_var
-    total_var_ref = numpy.sum(numpy.square(bins_vec - total_mean_ref) * prob_vec)
-    assert numpy.all(numpy.isclose(total_var, total_var_ref))
-    assert numpy.all(numpy.isclose(total_mean, total_mean_ref))
-
-    # get binary image
-    bin_image = numpy.zeros(gray_image.shape, dtype=numpy.uint8)
-    bin_image[numpy.where(gray_image > thr_b)] = 255
+    thr_b, time_b, bin_image = otsu_max_bclass_var(gray_image)
 
     return [thr_w, thr_b, time_w, time_b, bin_image]
 
 
-def change_background(quote_image_path: Path, bg_image_path: Path) -> numpy.ndarray:
+def change_background(quote_image_path: Path, bg_image_path: Path) -> np.ndarray:
     quote_image = skimage.io.imread(quote_image_path)
-    bg_image = skimage.io.imread(bg_image_path)
-
+    modified_image = skimage.io.imread(bg_image_path)
     # get binary image by otsu thresholding
-    _, _, _, _, bin_image = otsu_threshold(quote_image_path)
-
+    _, _, bin_image = otsu_max_bclass_var(quote_image)
     # overlay text on background image
-    modified_image = bg_image
-    modified_image[numpy.where(bin_image == 0)] = 0
+    modified_image[np.where(bin_image == 0)] = 0
+
     return modified_image
 
 
 def count_connected_components(gray_image_path: Path) -> int:
-    # get binary image by otsu thresholding
-    _, _, _, _, bin_image = otsu_threshold(gray_image_path)
     gray_image = skimage.io.imread(gray_image_path.as_posix())
-    pyplot.subplot(121)
-    pyplot.imshow(gray_image, cmap='gray')
-    pyplot.subplot(122)
-    pyplot.imshow(bin_image, cmap='gray')
-    pyplot.show()
-
-    R = numpy.zeros(bin_image.shape)
-    count = 0
-    repeated = 0
-    left = lambda i, j: bin_image[i - 1, j]
-    top = lambda i, j: bin_image[i, j - 1]
-    for col in range(1, bin_image.shape[0]):
-        for row in range(1, bin_image.shape[1]):
-            curr = bin_image[col][row]
-            if curr == 0:
-                if left(col, row) == 255 and top(col, row) == 255:
-                    count += 1
-                    R[col][row] = count
-                elif left(col, row) == 0 and top(col, row) == 255:
-                    R[col][row] = R[col - 1][row]
-                elif left(col, row) == 255 and top(col, row) == 0:
-                    R[col][row] = R[col][row - 1]
-                else:
-                    R[col][row] = R[col - 1][row]
-                    if R[col - 1][row] != R[col][row - 1]:
-                        R[numpy.where(R == R[col][row - 1])] = R[col - 1][row]
-                        repeated += 1
-    num_characters = count - repeated
-    cc_index, cc_length, _ = otsu_hist(R)
-    cc_index = cc_index[1:]
-    cc_length = cc_length[1:]
+    # get binary image by otsu thresholding
+    _, _, bin_image = otsu_max_bclass_var(gray_image)
+    # get connected components from binary image
+    regions, _, cc_length = get_connected_components(bin_image)
+    # Ignore small connected components like punctuations.
+    # Threshold of length 100 is used based on the histogram here.
     cc_length[cc_length < 100] = 0
-    #pyplot.plot(cc_index, cc_length)
-    #pyplot.show()
-    num_characters = numpy.count_nonzero(cc_length)
+    num_characters = np.count_nonzero(cc_length)
 
     return num_characters
 
 
-def binary_morphology(gray_image_path: Path) -> numpy.ndarray:
-    _, _, _, _, bin_image = otsu_threshold(gray_image_path)
+def binary_morphology(gray_image_path: Path) -> np.ndarray:
+    gray_image = skimage.io.imread(gray_image_path.as_posix())
+    # get binary image using otsu thresholding and normalize it to [0,1]
+    _, _, bin_image = otsu_max_bclass_var(gray_image)
     bin_image = bin_image / 255
-    h, w = bin_image.shape
 
+    # pad image with boundary pixel values
     k = 3
-    pad = int(k / 2)
-    padded_im = numpy.ones((h + k - 1, w + k - 1))
-    padded_im[pad:pad + h, pad:pad + w] = bin_image
-    start = time.time()
-    sum_image = numpy.zeros(bin_image.shape)
+    padded_im = get_padded_image(bin_image, kernel=k)
+
+    # Majority filter with a 3x3 window is used to remove noise here
+    h, w = bin_image.shape
+    sum_image = np.zeros(bin_image.shape)
+    # At each location, the pixel values within a 3x3 window are summed
     for k_h in range(k):
         for k_w in range(k):
             sum_image += padded_im[k_h:k_h + h, k_w:k_w + w]
-    cleaned_image = numpy.zeros(bin_image.shape)
-    cleaned_image[numpy.where(sum_image > 4)] = 255
+    # For a 3x3 window, if the sum at a location is >4, then the majority value is 1, otherwise it is 0.
+    cleaned_image = np.zeros(bin_image.shape)
+    cleaned_image[np.where(sum_image > 4)] = 255
 
     return cleaned_image
 
 
 def count_mser_components(gray_image_path: Path) -> list:
-    # get binary image by otsu thresholding
 
-    _, _, _, _, bin_image = otsu_threshold(gray_image_path)
-    gray_image = skimage.io.imread(gray_image_path.as_posix())
+    gray_image = skimage.io.imread(gray_image_path)
     n_pixels = gray_image.shape[0] * gray_image.shape[1]
-    pyplot.subplot(121)
-    pyplot.imshow(gray_image, cmap='gray')
-    pyplot.subplot(122)
-    pyplot.imshow(bin_image, cmap='gray')
-    #pyplot.show()
-    hist, bin_edges = numpy.histogram(gray_image, bins=numpy.arange(256))
-    pyplot.plot(bin_edges[:145], hist[:145])
-    #pyplot.show()
-    # print(hist, bin_edges)
-    lengths_at_t = numpy.zeros((255,5))
-    for thr in range(255): #[0, 1, 10, 140, 145, 149, 150, 175, 250]
 
-        pixels_above_thr = numpy.where(gray_image > thr)
+    black_letters = []  # list to collect lengths of black letters at each threshold
+    white_letters = []  # list to collect lengths of white letters at each threshold
+    black_threshold_max = -1  # In [0,black_threshold_max] binary image has black foreground, white background
+    white_threshold_min = -1  # In [white_threshold_min,255] binary image has white foreground, black background
+
+    for thr in range(256):  # sweep over all thresholds
+        bin_image = np.zeros(gray_image.shape, dtype=np.uint8)
+        pixels_above_thr = np.where(gray_image > thr)
         white_pixels = len(pixels_above_thr[0])
         black_pixels = n_pixels - white_pixels
-        if black_pixels < white_pixels:
-            bin_image = numpy.zeros(gray_image.shape, dtype=numpy.uint8)
-            bin_image[pixels_above_thr] = 1
+        bin_image[pixels_above_thr] = 255
+        if black_pixels < white_pixels:  # Identify the background based on pixel count
+            black_threshold_max = thr
+            foreground = 'black'
         else:
-            bin_image = numpy.ones(gray_image.shape, dtype=numpy.uint8)
-            bin_image[pixels_above_thr] = 0
-        '''
-        pyplot.subplot(121)
-        pyplot.imshow(gray_image, cmap='gray')
-        pyplot.subplot(122)
-        pyplot.imshow(bin_image, cmap='gray')
-        pyplot.title(f"threshold: {thr}")
-        pyplot.show()
-        '''
-        R = numpy.zeros(bin_image.shape)
-        count = 0
-        repeated = 0
-        left = lambda i, j: bin_image[i - 1, j]
-        top = lambda i, j: bin_image[i, j - 1]
-        for col in range(1, bin_image.shape[0]):
-            for row in range(1, bin_image.shape[1]):
-                curr = bin_image[col][row]
-                if curr == 0:
-                    if left(col, row) == 1 and top(col, row) == 1:
-                        count += 1
-                        R[col][row] = count
-                    elif left(col, row) == 0 and top(col, row) == 1:
-                        R[col][row] = R[col - 1][row]
-                    elif left(col, row) == 1 and top(col, row) == 0:
-                        R[col][row] = R[col][row - 1]
-                    else:
-                        R[col][row] = R[col - 1][row]
-                        if R[col - 1][row] != R[col][row - 1]:
-                            R[numpy.where(R == R[col][row - 1])] = R[col - 1][row]
-                            repeated += 1
-        cc_index, cc_length, _ = otsu_hist(R)
-        cc_index = cc_index[1:]
-        cc_length = cc_length[1:]
-        cc_index = cc_index[numpy.where(cc_length > 0)]
-        cc_length = cc_length[numpy.where(cc_length > 0)]
-        print(thr, count - repeated, cc_index, cc_length)
-        lengths_at_t[thr] = cc_length
+            foreground = 'white'
 
+        # get lengths of connected components and collect them in relevant lists based on the type of foreground
+        _, _, cc_length = get_connected_components(bin_image, foreground=foreground)
+        if thr <= black_threshold_max:  # connected components are black letters in image
+            black_letters.append(cc_length)
+        else:                           # connected components are white letters in image
+            white_letters.append(cc_length)
+    white_threshold_min = black_threshold_max + 1
 
-    pyplot.subplot(231)
-    pyplot.plot(numpy.arange(150),lengths_at_t[:150,0])
-    pyplot.subplot(232)
-    pyplot.plot(numpy.arange(150),lengths_at_t[:150,1])
-    pyplot.subplot(233)
-    pyplot.plot(numpy.arange(150),lengths_at_t[:150,2])
-    pyplot.subplot(234)
-    pyplot.plot(numpy.arange(150),lengths_at_t[:150,3])
-    pyplot.subplot(235)
-    pyplot.plot(numpy.arange(150),lengths_at_t[:150,4])
-    pyplot.show()
+    '''
+    eps = 5, delta = 5
+    black thresholds: [128. 144. 137. 144. 113.]
+    white thresholds: [250. 238. 221. 250. 227.]
+    eps = 3, delta = 5
+    black thresholds: [136. 145. 137. 145. 113.]
+    white thresholds: [251. 238. 239. 251. 235.]
+    '''
+    eps = 3
+    delta = 5
 
-    pyplot.subplot(231)
-    pyplot.plot(numpy.arange(150,255),lengths_at_t[150:,0])
-    pyplot.subplot(232)
-    pyplot.plot(numpy.arange(150,255),lengths_at_t[150:,1])
-    pyplot.subplot(233)
-    pyplot.plot(numpy.arange(150,255),lengths_at_t[150:,2])
-    pyplot.subplot(234)
-    pyplot.plot(numpy.arange(150,255),lengths_at_t[150:,3])
-    pyplot.subplot(235)
-    pyplot.plot(numpy.arange(150,255),lengths_at_t[150:,4])
-    pyplot.show()
+    n_black = len(black_letters[0])
+    black_thresh = -1 * np.ones((n_black))   # array to get stable thresholds for black letters
+    black_intensities = len(black_letters)      # relevant thresholds for black letters [0,black_threshold_max]
+    for t in range(eps, black_intensities - eps - 1):
+        curr_range = np.array(black_letters[t - eps:t + eps + 1])
+        curr_len = curr_range[eps - 1]
+        max_range = np.max(curr_range, axis=0) - curr_len
+        min_range = curr_len - np.min(curr_range, axis=0)
+        for k in range(n_black):
+            if (max_range[k] < delta and min_range[k] < delta):
+                if (t > black_thresh[k]):
+                    black_thresh[k] = t
 
+    n_white = len(white_letters[0])
+    white_thresh = -1 * np.ones((n_white))   # array to get stable thresholds for black letters
+    white_intensities = len(white_letters)      # relevant thresholds for black letters [0,black_threshold_max]
+    for t in range(eps, white_intensities - eps - 1):
+        curr_range = np.array(white_letters[t - eps:t + eps + 1])
+        curr_len = curr_range[eps - 1]
+        max_range = np.max(curr_range, axis=0) - curr_len
+        min_range = curr_len - np.min(curr_range, axis=0)
+        for k in range(n_white):
+            if max_range[k] < delta and min_range[k] < delta:
+                if t > white_thresh[k]:
+                    white_thresh[k] = t
+    white_thresh += white_threshold_min
 
-    mser_binary_image = bin_image
-    _, _, _, _, otsu_binary_image = otsu_threshold(gray_image_path)
-    num_mser_components = 0
+    # Get letters based on the respective stable threshold identified above and overlay on white background
+    mser_binary_image = np.ones(gray_image.shape, dtype=np.uint8) * 255
+    # Overlay originally black letters
+    for k in range(n_black):
+        # Get kth connected component from binary image obtained with the stable threshold
+        pixels_above_thr = np.where(gray_image > black_thresh[k])
+        bin_image = np.zeros(gray_image.shape, dtype=np.uint8)
+        bin_image[pixels_above_thr] = 255
+        regions, cc_index, cc_length = get_connected_components(bin_image, foreground='black')
+        mser_binary_image[np.where(regions == cc_index[k])] = 0
+
+    # Overlay originally white letters
+    for k in range(n_white):
+        # Get kth connected component from binary image obtained with the stable threshold
+        pixels_above_thr = np.where(gray_image > white_thresh[k])
+        bin_image = np.zeros(gray_image.shape, dtype=np.uint8)
+        bin_image[pixels_above_thr] = 255
+        regions, cc_index, cc_length = get_connected_components(bin_image, foreground='white')
+        mser_binary_image[np.where(regions == cc_index[k])] = 0
+
+    # get otsu threshold image
+    otsu_thr, _, otsu_binary_image = otsu_max_bclass_var(gray_image)
     num_otsu_components = count_connected_components(gray_image_path)
+    num_mser_components = n_black + n_white
     return [mser_binary_image, otsu_binary_image, num_mser_components, num_otsu_components]

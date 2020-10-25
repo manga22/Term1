@@ -6,8 +6,8 @@ import numpy
 import skimage.io
 from matplotlib import pyplot
 
-from Manogna_Sreenivas.AllFunctions import compute_hist, otsu_threshold, change_background
-from Manogna_Sreenivas.AllFunctions import count_connected_components, binary_morphology, count_mser_components
+from manogna_sreenivas.AllFunctions import compute_hist, otsu_threshold, change_background
+from manogna_sreenivas.AllFunctions import count_connected_components, binary_morphology, count_mser_components
 
 
 def problem1():
@@ -92,15 +92,17 @@ def problem6():
     pyplot.subplot(133)
     pyplot.imshow(otsu_binary_image, cmap='gray')
     pyplot.title('Otsu Binary Image')
+    pyplot.show()
+    return
 
 
 def main():
     problem1()
     problem2()
     problem3()
-    #problem4()
-    #problem5()
-    #problem6()
+    problem4()
+    problem5()
+    problem6()
     return
 
 
