@@ -40,10 +40,8 @@ def otsu_min_wclass_var(gray_image: np.ndarray) -> list:
     class1_var_t = np.zeros(bins_vec.shape, dtype=float)
     num_bins = bins_vec.shape[0]
     for t in range(num_bins):
-        class0_var_t[t] = np.sum(np.square(bins_vec[:t + 1] - class0_mean_t[t]) * prob_vec[:t + 1]) / \
-                          class0_prob_t[t]
-        class1_var_t[t] = np.sum((np.square(bins_vec[t + 1:] - class1_mean_t[t]) * prob_vec[t + 1:])) / \
-                          class1_prob_t[t]
+        class0_var_t[t] = np.sum(np.square(bins_vec[:t + 1] - class0_mean_t[t]) * prob_vec[:t + 1]) / class0_prob_t[t]
+        class1_var_t[t] = np.sum(np.square(bins_vec[t + 1:] - class1_mean_t[t]) * prob_vec[t + 1:]) / class1_prob_t[t]
     # Get within class variance at each threshold
     within_class_var = class0_prob_t * class0_var_t + class1_prob_t * class1_var_t
     # Otsu threshold is the one that minimizes within class variance
@@ -79,6 +77,12 @@ def get_padded_image(bin_image: np.ndarray, kernel: int) -> np.ndarray:
     pad = int(kernel / 2)
     padded_im = np.ones((h + kernel - 1, w + kernel - 1))
     padded_im[pad:pad + h, pad:pad + w] = bin_image
+    # pad rows at the top and bottom
+    padded_im[:pad] = padded_im[pad]
+    padded_im[-pad:] = padded_im[-pad-1]
+    # pad columns at the left and right end
+    padded_im[:,:pad] = np.expand_dims(padded_im[:,pad], 1)
+    padded_im[:,-pad:] = np.expand_dims(padded_im[:,-pad-1], 1)
     return padded_im
 
 

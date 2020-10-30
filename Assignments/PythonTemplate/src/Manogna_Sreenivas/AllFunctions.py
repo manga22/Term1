@@ -1,9 +1,9 @@
 # This file should contain all the functions required by Wrapper.py
 
 from pathlib import Path
-
-import numpy as np
+import time
 import skimage
+import numpy as np
 
 from manogna_sreenivas.helper import otsu_min_wclass_var, otsu_max_bclass_var, get_padded_image, \
     get_connected_components
@@ -20,7 +20,7 @@ def compute_hist(image_path: Path, num_bins: int) -> list:
     freq_vec = np.zeros(num_bins)
     for k in range(num_bins):
         freq_vec[k] = np.sum(np.bitwise_and(np.greater_equal(image, bins[k]), np.less(image, bins[k + 1])))
-    freq_vec[num_bins - 1] += np.sum(np.equal(image, bins[num_bins]))
+    freq_vec[num_bins - 1] += np.sum(np.equal(image, bins[num_bins]))       # include 255 in the last bin
 
     # using library function
     freq_vec_lib, bin_edges_lib = np.histogram(image, bins=num_bins)
@@ -34,6 +34,7 @@ def compute_hist(image_path: Path, num_bins: int) -> list:
 
 def otsu_threshold(gray_image_path: Path) -> list:
     gray_image = skimage.io.imread(gray_image_path)
+    # Time taken includes computation of image histogram, class probabilities and then threshold in both the cases
     # Minimizing within class variance
     thr_w, time_w = otsu_min_wclass_var(gray_image)
     # Maximizing between class variance
@@ -92,8 +93,17 @@ def binary_morphology(gray_image_path: Path) -> np.ndarray:
 
 
 def count_mser_components(gray_image_path: Path) -> list:
-
     gray_image = skimage.io.imread(gray_image_path)
+
+    # get otsu threshold image
+    start_time = time.time()
+    otsu_thr, _, otsu_binary_image = otsu_max_bclass_var(gray_image)
+    num_otsu_components = count_connected_components(gray_image_path)
+    end_time = time.time()
+    otsu_time = end_time - start_time
+
+    # get mser image
+    start_time = time.time()
     n_pixels = gray_image.shape[0] * gray_image.shape[1]
 
     black_letters = []  # list to collect lengths of black letters at each threshold
@@ -117,51 +127,42 @@ def count_mser_components(gray_image_path: Path) -> list:
         _, _, cc_length = get_connected_components(bin_image, foreground=foreground)
         if thr <= black_threshold_max:  # connected components are black letters in image
             black_letters.append(cc_length)
-        else:                           # connected components are white letters in image
+        else:  # connected components are white letters in image
             white_letters.append(cc_length)
     white_threshold_min = black_threshold_max + 1
 
-    '''
-    eps = 5, delta = 5
-    black thresholds: [128. 144. 137. 144. 113.]
-    white thresholds: [250. 238. 221. 250. 227.]
-    eps = 3, delta = 5
-    black thresholds: [136. 145. 137. 145. 113.]
-    white thresholds: [251. 238. 239. 251. 235.]
-    '''
+    # Epsilon and delta values chosen to determine MSER
     eps = 3
     delta = 5
 
     n_black = len(black_letters[0])
-    black_thresh = -1 * np.ones((n_black))   # array to get stable thresholds for black letters
-    black_intensities = len(black_letters)      # relevant thresholds for black letters [0,black_threshold_max]
+    black_thresh = -1 * np.ones(n_black)  # array to get stable thresholds for black letters
+    black_intensities = len(black_letters)  # relevant thresholds for black letters [0,black_threshold_max]
+    # As there can be multiple thresholds for which the lengths change within epsilon, \
+    # the maximum threshold for which this happens is chosen as relative error wrt threshold would be least
     for t in range(eps, black_intensities - eps - 1):
-        curr_range = np.array(black_letters[t - eps:t + eps + 1])
-        curr_len = curr_range[eps - 1]
-        max_range = np.max(curr_range, axis=0) - curr_len
-        min_range = curr_len - np.min(curr_range, axis=0)
-        for k in range(n_black):
-            if (max_range[k] < delta and min_range[k] < delta):
-                if (t > black_thresh[k]):
-                    black_thresh[k] = t
+        cclen_range = np.array(black_letters[t - eps:t + eps + 1])
+        cclen_t = black_letters[t]
+        # update threshold of connected components for which lengths lie between (l-eps,l+eps)
+        stable_range = np.logical_and(np.max(cclen_range, axis=0) < cclen_t + delta,
+                                      np.min(cclen_range, axis=0) > cclen_t - delta)
+        black_thresh[np.where(stable_range == True)] = t
 
     n_white = len(white_letters[0])
-    white_thresh = -1 * np.ones((n_white))   # array to get stable thresholds for black letters
-    white_intensities = len(white_letters)      # relevant thresholds for black letters [0,black_threshold_max]
+    white_thresh = -1 * np.ones(n_white)  # array to get stable thresholds for white letters
+    white_intensities = len(white_letters)
     for t in range(eps, white_intensities - eps - 1):
-        curr_range = np.array(white_letters[t - eps:t + eps + 1])
-        curr_len = curr_range[eps - 1]
-        max_range = np.max(curr_range, axis=0) - curr_len
-        min_range = curr_len - np.min(curr_range, axis=0)
-        for k in range(n_white):
-            if max_range[k] < delta and min_range[k] < delta:
-                if t > white_thresh[k]:
-                    white_thresh[k] = t
-    white_thresh += white_threshold_min
+        cclen_range = np.array(white_letters[t - eps:t + eps + 1])
+        cclen_t = white_letters[t]
+        # update threshold of connected components for which lengths lie between (l-eps,l+eps)
+        stable_range = np.logical_and(np.max(cclen_range, axis=0) < cclen_t + delta,
+                                      np.min(cclen_range, axis=0) > cclen_t - delta)
+        white_thresh[np.where(stable_range == True)] = t
+    white_thresh += white_threshold_min  # relevant thresholds for white letters [white_threshold_min,255]
 
     # Get letters based on the respective stable threshold identified above and overlay on white background
     mser_binary_image = np.ones(gray_image.shape, dtype=np.uint8) * 255
-    # Overlay originally black letters
+    # Overlay black letters
     for k in range(n_black):
         # Get kth connected component from binary image obtained with the stable threshold
         pixels_above_thr = np.where(gray_image > black_thresh[k])
@@ -169,8 +170,7 @@ def count_mser_components(gray_image_path: Path) -> list:
         bin_image[pixels_above_thr] = 255
         regions, cc_index, cc_length = get_connected_components(bin_image, foreground='black')
         mser_binary_image[np.where(regions == cc_index[k])] = 0
-
-    # Overlay originally white letters
+    # Overlay white letters in black
     for k in range(n_white):
         # Get kth connected component from binary image obtained with the stable threshold
         pixels_above_thr = np.where(gray_image > white_thresh[k])
@@ -179,8 +179,10 @@ def count_mser_components(gray_image_path: Path) -> list:
         regions, cc_index, cc_length = get_connected_components(bin_image, foreground='white')
         mser_binary_image[np.where(regions == cc_index[k])] = 0
 
-    # get otsu threshold image
-    otsu_thr, _, otsu_binary_image = otsu_max_bclass_var(gray_image)
-    num_otsu_components = count_connected_components(gray_image_path)
+    end_time = time.time()
+    mser_time = end_time - start_time
     num_mser_components = n_black + n_white
+    #print(f'Time taken for Otsu algorithm: {otsu_time}')
+    #print(f'Time taken for mser algorithm: {mser_time}')
+
     return [mser_binary_image, otsu_binary_image, num_mser_components, num_otsu_components]
