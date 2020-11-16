@@ -182,7 +182,7 @@ def count_mser_components(gray_image_path: Path) -> list:
     end_time = time.time()
     mser_time = end_time - start_time
     num_mser_components = n_black + n_white
-    #print(f'Time taken for Otsu algorithm: {otsu_time}')
-    #print(f'Time taken for mser algorithm: {mser_time}')
+    print(f'Time taken for Otsu algorithm: {otsu_time}')
+    print(f'Time taken for mser algorithm: {mser_time}')
 
     return [mser_binary_image, otsu_binary_image, num_mser_components, num_otsu_components]

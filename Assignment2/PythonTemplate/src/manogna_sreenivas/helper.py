@@ -5,7 +5,7 @@ import time
 def image_hist(image: np.ndarray) -> list:
     # custom function to get histogram for each intensity
     image = image.flatten()
-    bins_vec = np.arange(np.amin(image), np.amax(image) + 1)
+    bins_vec = np.arange(0, 256)
     freq_vec = np.zeros(bins_vec.shape)
     num_bins = bins_vec.shape[0]
     for k in range(num_bins):
