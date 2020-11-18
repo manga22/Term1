@@ -7,6 +7,8 @@ import numpy as np
 from matplotlib import pyplot
 import math
 
+from matplotlib.colors import NoNorm
+
 from manogna_sreenivas.helper import image_hist
 
 
@@ -22,114 +24,116 @@ def powerlaw_contrast(image: np.ndarray, exp: float) -> np.ndarray:
     return enhanced_image
 
 
-def hist_equalization(image: np.ndarray, clip=None) -> np.ndarray:
+def clip_histogram(prob_vec, clip):
+    mass = np.sum(prob_vec[np.where(prob_vec > clip)] - clip)
+    prob_vec[np.where(prob_vec >= clip)] = clip
+    valid_range = np.where(prob_vec < clip)
+    prob_vec[valid_range] += mass / (valid_range[0].shape[0])
+    if np.all(prob_vec <= clip):
+        return prob_vec
+    else:
+        prob_vec = clip_histogram(prob_vec,clip)
+    return prob_vec
+
+
+def hist_equalization(image: np.ndarray, clip=None, plot=False, clahe = False) -> np.ndarray:
     bins_vec, freq_vec, prob_vec = image_hist(image)
     valid_hist = np.where(freq_vec > 0)
     bins_vec = bins_vec[valid_hist]
     prob_vec = prob_vec[valid_hist]
     freq_vec = freq_vec[valid_hist]
     if (clip):
-        mass = np.sum(prob_vec[np.where(prob_vec > clip)] - clip)
-        prob_vec[np.where(prob_vec > clip)] = clip
-        dist = np.where(prob_vec <= clip)
-        prob_vec[dist] += mass / (dist[0].shape[0])
-        # print(mass, np.cumsum(prob_vec)[-1])
-        # bins_vec, freq_vec, prob_vec = image_hist(image)
-        # pyplot.plot(bins_vec, prob_vec)
-        # pyplot.show()
+        prob_vec=clip_histogram(prob_vec,clip)
     cdf_image = np.cumsum(prob_vec)
     enhanced_image = np.zeros(image.shape)
     for k in range(bins_vec.shape[0]):
         enhanced_image[np.where(image == bins_vec[k])] = cdf_image[k]
+    if clahe:
+        return enhanced_image
+    enhanced_image = np.array(enhanced_image * 255, dtype=np.uint8)
+    if(plot):
+        pyplot.subplot(221, title='Original image')
+        pyplot.imshow(image/255, cmap='gray', norm=NoNorm())
+        pyplot.subplot(222, title='After equalization')
+        pyplot.imshow(enhanced_image, cmap='gray', norm=NoNorm())
+        pyplot.subplot(223)
+        pyplot.hist(image.flatten(), bins=255, range=(0,256), density=True)
+        pyplot.subplot(224)
+        pyplot.hist(enhanced_image.flatten(), bins=255, range=(0,256), density=True)
+        pyplot.show()
     return enhanced_image
 
 
-def clahe(image: np.ndarray, clip=0.015, overlap=True) -> np.ndarray:
+def clahe(image: np.ndarray, clip=0.015, overlap=0.25) -> np.ndarray:
     k = 8
     image = image
     h, w = image.shape
     clahe_im = np.zeros(image.shape)
     if (overlap):
-        n_x = 4 * int(w / 25 + 1)
-        n_y = 4 * int(h / 25 + 1)
-        overlap_x = int(n_x / 4)
-        overlap_y = int(n_y / 4)
+        n_x = 4 * int(w / (3*k+1) + 1)
+        n_y = 4 * int(h / (3*k+1) + 1)
+        overlap_x = int(overlap * n_x)
+        overlap_y = int(overlap * n_y)
         shift_x = int(3 / 4 * n_x)
         shift_y = int(3 / 4 * n_y)
-        # print(n_x, n_y)
-        for i in range(8):
-            for j in range(8):
+        for i in range(k):
+            for j in range(k):
                 tile = image[i * shift_y:i * shift_y + n_y, j * shift_x:j * shift_x + n_x]
-                enhanced_tile = hist_equalization(tile, clip=clip)
+                enhanced_tile = hist_equalization(tile, clip=clip, clahe=True)
                 if (j > 0):
-                    # pyplot.imshow(enhanced_tile[:,:overlap_x], cmap='gray')
-                    # pyplot.show()
-                    # pyplot.imshow(clahe_im[i * shift_y:i * shift_y + n_y, j * shift_x:j * shift_x + overlap_x], cmap='gray')
-                    # pyplot.show()
-                    enhanced_tile[:, :overlap_x] = (enhanced_tile[:, :overlap_x] + clahe_im[
-                                                                                   i * shift_y:i * shift_y + n_y,
-                                                                                   j * shift_x:j * shift_x + overlap_x]) / 2
+                    enhanced_tile[:, :overlap_x] = (enhanced_tile[:, :overlap_x] + \
+                                                    clahe_im[i * shift_y:i * shift_y + n_y, j * shift_x:j * shift_x + overlap_x]) / 2
                 if (i > 0):
-                    enhanced_tile[:overlap_y, :] = (enhanced_tile[:overlap_y, :] + clahe_im[
-                                                                                   i * shift_y:i * shift_y + overlap_y,
-                                                                                   j * shift_x:j * shift_x + n_x]) / 2
+                    enhanced_tile[:overlap_y, :] = (enhanced_tile[:overlap_y, :] + \
+                                                    clahe_im[i * shift_y:i * shift_y + overlap_y, j * shift_x:j * shift_x + n_x]) / 2
                 clahe_im[i * shift_y:i * shift_y + n_y, j * shift_x:j * shift_x + n_x] = enhanced_tile
-                # pyplot.imshow(clahe_im)
-                # pyplot.show()
-                print(i * shift_y + n_y, j * shift_x + n_x,
-                      clahe_im[i * shift_y:i * shift_y + n_y, j * shift_x:j * shift_x + n_x].shape)
     else:
-        n_x = int(w / 8)
-        n_y = int(h / 8)
-        for i in range(8):
-            for j in range(8):
+        n_x = int(w / k)
+        n_y = int(h / k)
+        for i in range(k):
+            for j in range(k):
                 tile = image[i * n_y:(i + 1) * n_y, j * n_x:(j + 1) * n_x]
-                clahe_im[i * n_y:(i + 1) * n_y, j * n_x:(j + 1) * n_x] = hist_equalization(tile, clip=clip)
-    clahe_im = np.array(clahe_im * 255, dtype=np.uint8)
+                clahe_im[i * n_y:(i + 1) * n_y, j * n_x:(j + 1) * n_x] = hist_equalization(tile, clip=clip, clahe=True)
+
     return clahe_im
 
 
-def saturated_contrast(image: np.ndarray) -> np.ndarray:
-    image_r = image[:, :, 0]
-    image_g = image[:, :, 1]
-    image_b = image[:, :, 2]
+def saturated_contrast(image: np.ndarray, percent = 0.15, plot=True, powerlaw=False) -> np.ndarray:
+    ch =['R','G','B']
     enhanced_im = np.zeros(image.shape, dtype=np.uint8)
-    gain = [3, 3, 1.2]
     for k in range(3):
         im_ch = image[:, :, k]
         bins_vec, freq_vec, prob_vec = image_hist(im_ch)
-        # print(np.amax(image[:,:,k]), np.amin(image[:,:,k]))
-        bright_pixels = np.where(im_ch > 250)
-        l = bright_pixels[0].shape[0]
-        index = np.random.randint(l - 1, size=int(0.25 * l))
-        new = tuple([bright_pixels[0][index], bright_pixels[1][index]])
-        print(index)
-        im_ch = im_ch * gain[k]
-        im_ch[np.where(im_ch >= 255)] = 255
-        im_ch[new] = 255
-        enhanced_im[:, :, k] = im_ch
+        cdf = np.cumsum(prob_vec)
+        low_t = np.where(cdf<percent)
+        high_t = np.where(cdf>(1-percent))
+        if(low_t[0].size!=0):   #set darkest pixels to 0
+            low_t=low_t[0][-1]
+            im_ch[np.where(im_ch<low_t)]=0
+        if(high_t[0].size!=0):  #set brightest pixels to 0 and perform linear contrast stretch
+            high_t=high_t[0][0]
+            gain = 255/high_t
+            im_ch= im_ch * gain
+            im_ch[np.where(im_ch > 255)] = 255
 
-        pyplot.subplot(121)
-        pyplot.plot(bins_vec, prob_vec)
-        print(freq_vec[255])
-        pyplot.subplot(122)
-        bins_vec, freq_vec, prob_vec = image_hist(enhanced_im[:, :, k])
-        print(freq_vec[255])
-        pyplot.plot(bins_vec, prob_vec)
-        pyplot.show()
+        if powerlaw:
+            im_ch = powerlaw_contrast(im_ch, exp=0.5)
+        enhanced_im[:, :, k] = np.array(im_ch, dtype=np.uint8)
 
-        pyplot.subplot(121)
-        pyplot.imshow(image[:, :, k], cmap='gray')
-        pyplot.subplot(122)
-        pyplot.imshow(enhanced_im[:, :, k], cmap='gray')
-        pyplot.show()
-    pyplot.subplot(121)
-    pyplot.imshow(image)
-    pyplot.subplot(122)
-    pyplot.imshow(enhanced_im)
-    pyplot.show()
+        #plot image and histogram before and after saturated contrast stretch
+        if plot:
+            pyplot.subplot(221, title=f'{ch[k]} channel')
+            pyplot.imshow(image[:, :, k], cmap='gray', norm=NoNorm())
+            pyplot.subplot(222, title=f'After contrast stretch')
+            pyplot.imshow(enhanced_im[:, :, k], cmap='gray', norm=NoNorm())
+            pyplot.subplot(223)
+            pyplot.plot(bins_vec, prob_vec)
+            pyplot.subplot(224)
+            bins_vec, freq_vec, prob_vec = image_hist(enhanced_im[:, :, k])
+            pyplot.plot(bins_vec, prob_vec)
+            pyplot.show()
 
-    return image
+    return enhanced_im
 
 
 def interpolate(image, x, y, type='nearest'):
@@ -140,7 +144,6 @@ def interpolate(image, x, y, type='nearest'):
         y1 = int(y)
         x2 = x1 + 1
         y2 = y1 + 1
-        # print(x1,y1,x2,y2)
         a_x1y1 = float(image[y1][x1])
         a_x2y1 = float(image[y1][x2])
         a_x1y2 = float(image[y2][x1])
@@ -150,108 +153,130 @@ def interpolate(image, x, y, type='nearest'):
         v = np.array([1, x - x1, y - y1, (x - x1) * (y - y1)])
         return np.dot(w, v)
 
+def interpolate_vec(image: np.ndarray, indices: list, type='nearest') ->np.ndarray:
+    if (type == 'nearest'):
+        interp_vec = image[np.array(indices[0]+0.5,dtype=int), np.array(indices[1]+0.5,dtype=int)]
+    elif(type == 'bilinear'):
+        y, x = indices
+        y1, x1 = [np.array(indices[0], dtype=int), np.array(indices[1], dtype=int)]
+        y2 = y1 + 1
+        x2 = x1 + 1
+        a_x1y1 = np.array(image[y1, x1], dtype=float)
+        a_x2y1 = np.array(image[y1, x2], dtype=float)
+        a_x1y2 = np.array(image[y2, x1], dtype=float)
+        a_x2y2 = np.array(image[y2, x2], dtype=float)
+        interp_vec = a_x1y1 + ((a_x2y1 - a_x1y1) / (x2 - x1)) * (x - x1) + ((a_x1y2 - a_x1y1) / (y2 - y1)) * (y - y1) + \
+                         ((a_x2y2 - a_x1y2 - a_x2y1 + a_x1y1) / ((x2 - x1) * (y2 - y1))) * (x - x1) * (y - y1)
+    return interp_vec
 
-def resize(image: np.ndarray, scale: int, type='nearest') -> np.ndarray:
+def resize_vec(image: np.ndarray, scale: int, type='nearest') -> np.ndarray:
     h, w = image.shape
-    resized_im = np.zeros((int(h * scale), int(w * scale)))
-    print(resized_im.shape)
-    for y in range(resized_im.shape[0]):
-        for x in range(resized_im.shape[1]):
-            resized_im[y, x] = interpolate(image, x / scale - 1, y / scale - 1,
-                                           type=type)  # image[int(i / scale + 0.5), int(j / scale + 0.5)]
+    resized_im_vec = np.zeros((int((h-1) * scale), int((w-1) * scale)))
 
+    return resized_im_vec
+
+def resize(image: np.ndarray, scale: int, type='nearest', method='vectorized') -> np.ndarray:
+    h, w = image.shape
+    resized_im = np.zeros((int((h-1) * scale), int((w-1) * scale)))
+    if(method=='ref'):
+        for y in range(resized_im.shape[0]):
+            for x in range(resized_im.shape[1]):
+                resized_im[y, x] = interpolate(image, x / scale - 1, y / scale - 1, type=type)
+    if(method=='vectorized'):
+        indices = np.indices(resized_im.shape)
+        indices = indices / scale
+        resized_im = interpolate_vec(image, indices, type=type)
     return resized_im
 
 
-def rotate_bottomleft(image: np.ndarray, theta: int, type='nearest') -> np.ndarray:
-
-    c = math.cos(math.radians(theta))
-    s = math.sin(math.radians(theta))
-
-    h, w = image.shape
-
-    a1 = lambda x, y: c * x + (y - h) * s
-    a2 = lambda x, y: h - (s * x + (h - y) * c)
-
-    # Compute width, height and offsets for rotated image
-    width = int(max(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h))) - int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
-    height = int(max(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h))) - int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)))
-    Kx = int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
-    Ky = int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)))
-
-    print(width, height, Kx, Ky)
-    print(f'x:{a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)}')
-    print(f'x:{a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)}')
-
-    r_image = np.zeros((height, width))
-
-    c = math.cos(math.radians(-theta))
-    s = math.sin(math.radians(-theta))
-
-    for y in range(Ky, Ky + height):
-        for x in range(Kx, Kx + width):
-            x_actual = a1(x, y)
-            y_actual = a2(x, y)
-            if (x_actual >= 0 and x_actual <= w - 1 and y_actual >= 0 and y_actual <= h - 1):
-                r_image[y - Ky, x - Kx] = interpolate(image, x_actual - 1, y_actual - 1, type=type)
-
-    return r_image
-
-
-def rotate_topleft(image: np.ndarray, theta: int, type='nearest') -> np.ndarray:
-    a1 = lambda x, y: c * x - y * s
-    a2 = lambda x, y: s * x + y * c
-
-    if theta > 270 and theta <360:
-        theta = 360-theta
-
-    c = math.cos(math.radians(theta))
-    s = math.sin(math.radians(theta))
-
+def rotate(image: np.ndarray, theta: int, type='nearest', method='vectorized') -> np.ndarray:
     h, w = image.shape
 
     # Compute width, height and offsets for rotated image
-    width = int(max(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h))) - int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
-    height = int(max(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h))) - int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)))
-    Kx = int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
-    Ky = int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)))
+    c = math.cos(math.radians(theta))
+    s = math.sin(math.radians(theta))
+    x_corner = np.array([0,0,w-1,w-1],dtype=float)
+    y_corner = np.array([0,h-1,0,h-1], dtype=float)
+    # Transforming the rotation matrix from cartesian coordinates to image coordinates
+    h_index = h - 1
+    r_x_corner = c * x_corner + (y_corner - h) * s
+    r_y_corner = h - (s * x_corner + (h - y_corner) * c)
+    r_w =int(max(r_x_corner))-int(min(r_x_corner))
+    r_h =int(max(r_y_corner))-int(min(r_y_corner))
+    Kx = int(min(r_x_corner))
+    Ky = int(min(r_y_corner))
 
-    print(width, height, Kx, Ky)
-    print(max(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)), min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
-    print(f'x:{a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)}')
-    print(f'y:{a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)}')
-
-    r_image = np.zeros((height, width))
+    r_image = np.zeros((r_h, r_w))
 
     c = math.cos(math.radians(-theta))
     s = math.sin(math.radians(-theta))
-    for y in range(Ky, Ky + height):
-        for x in range(Kx, Kx + width):
-            x_actual = a1(x, y)
-            y_actual = a2(x, y)
-            if (x_actual >= 0 and x_actual <= w - 1 and y_actual >= 0 and y_actual <= h - 1):
-                # print(x_actual, y_actual)
-                r_image[y - Ky, x - Kx] = interpolate(image, x_actual - 1, y_actual - 1, type=type)
+    # For each pixel in rotated image get the intensity from corresponding location in original image
+    if(method=='ref'):
+        for y in range(Ky, Ky + r_h):
+            for x in range(Kx, Kx + r_w):
+                x_actual = c * x + (y - h) * s
+                y_actual = h - (s * x + (h - y) * c)
+                if x_actual >= 0 and x_actual < w - 1 and y_actual >= 0 and y_actual < h - 1:  # valid range in original image
+                    r_image[y - Ky, x - Kx] = interpolate(image, x_actual, y_actual, type=type)
 
+    if(method=='vectorized'):
+        indices= np.indices(r_image.shape)
+        y=indices[0]+Ky
+        x=indices[1]+Kx
+        x_actual = c * x + (y - h) * s
+        y_actual = h - (s * x + (h - y) * c)
+        # valid range of indices in original image
+        valid = np.bitwise_and(np.bitwise_and(x_actual>=0, x_actual<w-1), np.bitwise_and(y_actual>=0, y_actual<h-1))
+        valid_indices = np.where(valid!=0)
+        if (theta % 90 == 0):
+            r_image[valid_indices] = image[np.array(y_actual[valid_indices],dtype=int),np.array(x_actual[valid_indices],dtype=int)]
+        else:
+            r_image[valid_indices] = interpolate_vec(image, [y_actual[valid_indices],x_actual[valid_indices]], type=type)
     return r_image
 
-
-def rotate(image: np.ndarray, theta: int, type='nearest', corner='top_left') -> np.ndarray:
+def rotate2(image: np.ndarray, theta: int, type='nearest') -> np.ndarray:
     h, w = image.shape
     if (theta % 90 == 0):
-        print('if')
-        c = math.cos(math.radians(-theta))
-        s = math.sin(math.radians(-theta))
-        a1 = lambda x, y: c * x - y * s
-        a2 = lambda x, y: s * x + y * c
-        r_image = np.zeros((h, w))
-        for y in range(h):
-            for x in range(w):
-                print(x, y, a2(x, y), a1(x, y))
+        if(theta == 90):
+            a1 = lambda x, y: -y-1
+            a2 = lambda x, y: x
+            r_image = np.zeros((w, h))
+        elif(theta == 180):
+            a1 = lambda x, y: -x-1
+            a2 = lambda x, y: -y-1
+            r_image = np.zeros((h, w))
+        elif (theta == 270):
+            a1 = lambda x, y: y
+            a2 = lambda x, y: -x-1
+            r_image = np.zeros((w, h))
+        for y in range(r_image.shape[0]):
+            for x in range(r_image.shape[1]):
                 r_image[y, x] = image[int(a2(x, y)), int(a1(x, y))]
     else:
-        if (corner == 'top_left'):
-            r_image = rotate_topleft(image, theta=theta, type=type)
-        elif (corner == 'bottom_left'):
-            r_image = rotate_bottomleft(image, theta=theta, type=type)
-    return r_image
+        c = math.cos(math.radians(theta))
+        s = math.sin(math.radians(theta))
+
+        #Transforming the rotation matrix from cartesian coordinates to image coordinates
+        h_index = h - 1
+        a1 = lambda x, y: c * x + (y - h_index) * s
+        a2 = lambda x, y: h_index - (s * x + (h_index - y) * c)
+
+        # Compute width, height and offsets for rotated image
+        r_w = int(max(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h))) - int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h)))
+        r_h = int(max(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h))) - int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h)))
+        Kx = int(min(a1(0, 0), a1(w, 0), a1(w, h), a1(0, h))+0.5)
+        Ky = int(min(a2(0, 0), a2(w, 0), a2(w, h), a2(0, h))+0.5)
+        r_image = np.zeros((r_h, r_w))
+        r_image_vec = np.zeros((r_h, r_w))
+
+        #For each pixel in rotated image get the intensity from corresponding location in original image
+        c = math.cos(math.radians(-theta))
+        s = math.sin(math.radians(-theta))
+        for y in range(Ky, Ky + r_h):
+            for x in range(Kx, Kx + r_w):
+                x_actual = a1(x, y)
+                y_actual = a2(x, y)
+                if x_actual >= 0 and x_actual <= w - 1 and y_actual >= 0 and y_actual <= h - 1:   # valid range in original image
+                    r_image[y - Ky, x - Kx] = interpolate(image, x_actual , y_actual , type=type)
+
+    return r_image_vec
