@@ -1,0 +1,1 @@
+function num_characters = count_connected_components(gray_image_path)
