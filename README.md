@@ -1,2 +1,2 @@
-# Term1
-Assignments and Homeworks of Term1 PhD 
+# Stochastic Models and Applications
+This branch contains all the course materials of Stoma
